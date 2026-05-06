@@ -158,6 +158,7 @@ func (s *TaskService) GetStats() (model.StatsResponse, error) {
 // BUG #1: integer division — hasil selalu 0 kecuali semua task selesai.
 // Contoh: 1 dari 3 task selesai → 1/3 = 0 (integer), bukan 33.33.
 // Perbaiki: float64(completed) / float64(len(tasks)) * 100
+// CalculateCompletionRate menghitung persentase task berstatus "done".
 func CalculateCompletionRate(tasks []model.Task) float64 {
 	if len(tasks) == 0 {
 		return 0
@@ -168,8 +169,9 @@ func CalculateCompletionRate(tasks []model.Task) float64 {
 			completed++
 		}
 	}
-	// BUG: integer division
-	return float64(completed/len(tasks)) * 100
+	
+	// PERBAIKAN: Konversi masing-masing variabel ke float64 sebelum dibagi
+	return (float64(completed) / float64(len(tasks))) * 100
 }
 
 // generateID membuat ID unik berbasis timestamp + counter.
