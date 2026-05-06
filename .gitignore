@@ -21,3 +21,9 @@ go.work.sum
 
 # Docker volumes (lokal saja)
 pgdata/
+
+# Go test coverage outputs
+*.out
+coverage.out
+cov.out
+cov_filtered.out

@@ -110,3 +110,23 @@ func TestMaxLength(t *testing.T) {
 		})
 	}
 }
+
+// Test Case Baru 
+
+func TestCustomNewValidationCases(t *testing.T) {
+	// Test Case Baru #1: Memastikan status dengan huruf besar tetap dianggap VALID karena sistem auto-lowercase
+	t.Run("status_uppercase_harus_valid_karena_case_insensitive", func(t *testing.T) {
+		uppercaseStatus := "DONE"
+		if !validator.IsValidStatus(uppercaseStatus) {
+			t.Errorf("IsValidStatus(%q) = false, want true (sistem harus toleran dan melakukan auto-lowercase)", uppercaseStatus)
+		}
+	})
+
+	// Test Case Baru #2: Memastikan prioritas dengan huruf besar tetap dianggap VALID karena sistem auto-lowercase
+	t.Run("priority_uppercase_harus_valid_karena_case_insensitive", func(t *testing.T) {
+		uppercasePriority := "HIGH"
+		if !validator.IsValidPriority(uppercasePriority) {
+			t.Errorf("IsValidPriority(%q) = false, want true (sistem harus toleran dan melakukan auto-lowercase)", uppercasePriority)
+		}
+	})
+}
