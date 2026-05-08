@@ -14,7 +14,6 @@ on:
       - dev
 
 jobs:
-  # ── STAGE 1: CI (Testing & Analysis) ───────────────────────────────────────
   test:
     name: Test with Go v${{ matrix.go-version }}
     runs-on: ubuntu-latest
@@ -51,25 +50,25 @@ jobs:
       - name: Install Dependencies
         run: go mod download
 
-      - name: Run Go Vet (Static Analysis)
+      - name: Run Go Vet
         run: go vet ./...
 
-      - name: Run Integration & Unit Tests (Race Detector)
+      - name: Run Integration & Unit Tests
         env:
           DATABASE_URL: postgres://taskflow:taskflow_secret@localhost:5432/taskflow?sslmode=disable
         run: |
           go test -tags=integration -race -coverprofile=cov.out ./...
 
-      - name: Check Code Coverage Threshold (Min 75%)
+      - name: Check Code Coverage Threshold
         run: |
           TOTAL_COVERAGE=$(go tool cover -func=cov.out | grep total | awk '{print $3}' | sed 's/%//')
           echo "Total Project Coverage: $TOTAL_COVERAGE%"
           if (( $(echo "$TOTAL_COVERAGE < 75.0" | bc -l) )); then
-            echo "❌ ERROR: Coverage ($TOTAL_COVERAGE%) di bawah ambang batas 75%!"
+            echo "❌ ERROR: Coverage ($TOTAL_COVERAGE%) di bawah 75%!"
             exit 1
           fi
 
-      - name: Compile Binary (Go Build)
+      - name: Compile Binary
         run: go build -o taskflow-api ./cmd/server/main.go
 
       - name: Upload Coverage Artifact
@@ -79,12 +78,10 @@ jobs:
           path: cov.out
           retention-days: 7
 
-  # ── STAGE 2: CD (Build, Push & Smoke Test) ──────────────────────────────────
   build-and-push:
     name: Build, Push, and Smoke Test
     needs: test
     runs-on: ubuntu-latest
-    # Jalankan CD hanya pada push ke branch utama, bukan pada Pull Request
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/staging')
     permissions:
       contents: read
@@ -94,7 +91,7 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Login to GitHub Container Registry (GHCR)
+      - name: Login to GHCR
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -114,24 +111,16 @@ jobs:
             ghcr.io/${{ github.repository }}:sha-${{ steps.vars.outputs.sha_short }}
             ghcr.io/${{ github.repository }}:latest
 
-      # ── SKENARIO 4: SMOKE TEST ─────────────────────────────────────────────
       - name: Run Smoke Test
         run: |
-          # Jalankan container secara temporer untuk testing
           docker run -d --name smoke-test -p 8080:8080 ghcr.io/${{ github.repository }}:sha-${{ steps.vars.outputs.sha_short }}
           echo "Waiting for server to be ready..."
           sleep 5
-
-          echo "Checking Health Endpoint..."
           curl -f http://localhost:8080/health || (docker logs smoke-test && exit 1)
-
-          echo "Checking Stats Endpoint..."
           curl -f http://localhost:8080/api/v1/stats || (docker logs smoke-test && exit 1)
-
-          echo "✅ Smoke test sukses!"
+          echo "✅ Smoke test berhasil"
           docker rm -f smoke-test
 
-      # ── SKENARIO 4: NOTIFIKASI TELEGRAM ────────────────────────────────────
       - name: Notify Telegram Success
         if: success()
         uses: appleboy/telegram-action@master
@@ -147,7 +136,7 @@ jobs:
             *SHA:* `${{ steps.vars.outputs.sha_short }}`
             *Status:* Smoke Test Lulus 🚀
 
-            [Lihat Detail Pipeline](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id patch }})
+            [Lihat Detail Pipeline](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
 
       - name: Notify Telegram Failure
         if: failure()
