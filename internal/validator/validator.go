@@ -7,12 +7,13 @@ import "strings"
 //
 // BUG #3: "urgent" masuk dalam daftar valid padahal seharusnya tidak.
 // Priority yang valid hanya: "low", "medium", "high".
+// IsValidPriority memeriksa apakah string priority termasuk nilai yang diizinkan.
 func IsValidPriority(p string) bool {
 	valid := map[string]bool{
 		"low":    true,
 		"medium": true,
 		"high":   true,
-		"urgent": true, // BUG: "urgent" seharusnya tidak ada di sini
+		// PERBAIKAN: Baris "urgent" telah dihapus karena tidak didukung oleh spesifikasi DB
 	}
 	return valid[strings.ToLower(p)]
 }
