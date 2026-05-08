@@ -1,4 +1,6 @@
 name: TaskFlow API CI/CD Pipeline
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 on:
   push:
@@ -90,6 +92,17 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+
+      - name: Set up Go v${{ matrix.go-version }}
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go-version }}
+          # Matikan cache jika versi 1.21 untuk menghindari error tar
+          cache: ${{ matrix.go-version != '1.21' }}
+
+      - name: Install Dependencies
+        # Tambahkan manual install untuk memastikan dependency bersih di 1.21
+        run: go mod download
 
       - name: Login to GHCR
         uses: docker/login-action@v3
