@@ -14,6 +14,7 @@ on:
       - dev
 
 jobs:
+  # ── STAGE 1: CI (Testing & Analysis) ───────────────────────────────────────
   test:
     name: Test with Go v${{ matrix.go-version }}
     runs-on: ubuntu-latest
@@ -50,25 +51,25 @@ jobs:
       - name: Install Dependencies
         run: go mod download
 
-      - name: Run Go Vet
+      - name: Run Go Vet (Static Analysis)
         run: go vet ./...
 
-      - name: Run Integration & Unit Tests
+      - name: Run Integration & Unit Tests (Race Detector)
         env:
           DATABASE_URL: postgres://taskflow:taskflow_secret@localhost:5432/taskflow?sslmode=disable
         run: |
           go test -tags=integration -race -coverprofile=cov.out ./...
 
-      - name: Check Code Coverage Threshold
+      - name: Check Code Coverage Threshold (Min 75%)
         run: |
           TOTAL_COVERAGE=$(go tool cover -func=cov.out | grep total | awk '{print $3}' | sed 's/%//')
           echo "Total Project Coverage: $TOTAL_COVERAGE%"
           if (( $(echo "$TOTAL_COVERAGE < 75.0" | bc -l) )); then
-            echo "❌ ERROR: Coverage ($TOTAL_COVERAGE%) di bawah 75%!"
+            echo "❌ ERROR: Coverage ($TOTAL_COVERAGE%) di bawah ambang batas 75%!"
             exit 1
           fi
 
-      - name: Compile Binary
+      - name: Compile Binary (Go Build)
         run: go build -o taskflow-api ./cmd/server/main.go
 
       - name: Upload Coverage Artifact
@@ -78,88 +79,89 @@ jobs:
           path: cov.out
           retention-days: 7
 
-  # ── NEW: Stage CD (Hanya jalan setelah test sukses) ─────────────────────────
-build-and-push:
-  name: Build, Push, and Smoke Test
-  needs: test
-  runs-on: ubuntu-latest
-  if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/staging')
-  permissions:
-    contents: read
-    packages: write
+  # ── STAGE 2: CD (Build, Push & Smoke Test) ──────────────────────────────────
+  build-and-push:
+    name: Build, Push, and Smoke Test
+    needs: test
+    runs-on: ubuntu-latest
+    # Jalankan CD hanya pada push ke branch utama, bukan pada Pull Request
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/staging')
+    permissions:
+      contents: read
+      packages: write
 
-  steps:
-    - name: Checkout Code
-      uses: actions/checkout@v4
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
-    - name: Login to GHCR
-      uses: docker/login-action@v3
-      with:
-        registry: ghcr.io
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Login to GitHub Container Registry (GHCR)
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Get Short SHA
-      id: vars
-      run: echo "sha_short=$(git rev-parse --short=7 HEAD)" >> $GITHUB_OUTPUT
+      - name: Get Short SHA
+        id: vars
+        run: echo "sha_short=$(git rev-parse --short=7 HEAD)" >> $GITHUB_OUTPUT
 
-    - name: Build and Push Docker Image
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        push: true
-        tags: |
-          ghcr.io/${{ github.repository }}:sha-${{ steps.vars.outputs.sha_short }}
-          ghcr.io/${{ github.repository }}:latest
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:sha-${{ steps.vars.outputs.sha_short }}
+            ghcr.io/${{ github.repository }}:latest
 
-    # ── KRITERIA SKENARIO 4: SMOKE TEST ──────────────────────────────────
-    - name: Run Smoke Test
-      run: |
-        docker run -d --name smoke-test -p 8080:8080 ghcr.io/${{ github.repository }}:sha-${{ steps.vars.outputs.sha_short }}
-        echo "Waiting for server to be ready..."
-        sleep 5
+      # ── SKENARIO 4: SMOKE TEST ─────────────────────────────────────────────
+      - name: Run Smoke Test
+        run: |
+          # Jalankan container secara temporer untuk testing
+          docker run -d --name smoke-test -p 8080:8080 ghcr.io/${{ github.repository }}:sha-${{ steps.vars.outputs.sha_short }}
+          echo "Waiting for server to be ready..."
+          sleep 5
 
-        echo "Running Health Check..."
-        curl -f http://localhost:8080/health || (docker logs smoke-test && exit 1)
+          echo "Checking Health Endpoint..."
+          curl -f http://localhost:8080/health || (docker logs smoke-test && exit 1)
 
-        echo "Running API Stats Check..."
-        curl -f http://localhost:8080/api/v1/stats || (docker logs smoke-test && exit 1)
+          echo "Checking Stats Endpoint..."
+          curl -f http://localhost:8080/api/v1/stats || (docker logs smoke-test && exit 1)
 
-        echo "✅ Smoke test berhasil"
-        docker rm -f smoke-test
+          echo "✅ Smoke test sukses!"
+          docker rm -f smoke-test
 
-    # ── KRITERIA SKENARIO 4: NOTIFIKASI TELEGRAM (SUKSES) ───────────────
-    - name: Notify Telegram Success
-      if: success()
-      uses: appleboy/telegram-action@master
-      with:
-        to: ${{ secrets.TELEGRAM_TO }}
-        token: ${{ secrets.TELEGRAM_TOKEN }}
-        format: markdown
-        message: |
-          ✅ *Deployment Stable - Siap Demo!*
+      # ── SKENARIO 4: NOTIFIKASI TELEGRAM ────────────────────────────────────
+      - name: Notify Telegram Success
+        if: success()
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ secrets.TELEGRAM_TO }}
+          token: ${{ secrets.TELEGRAM_TOKEN }}
+          format: markdown
+          message: |
+            ✅ *Deployment Stable - Siap Demo!*
 
-          *Repository:* ${{ github.repository }}
-          *Branch:* `${{ github.ref_name }}`
-          *SHA:* `${{ steps.vars.outputs.sha_short }}`
-          *Status:* Smoke Test Lulus 🚀
+            *Repo:* ${{ github.repository }}
+            *Branch:* `${{ github.ref_name }}`
+            *SHA:* `${{ steps.vars.outputs.sha_short }}`
+            *Status:* Smoke Test Lulus 🚀
 
-          [Lihat Pipeline Run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            [Lihat Detail Pipeline](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id patch }})
 
-    # ── KRITERIA SKENARIO 4: NOTIFIKASI TELEGRAM (GAGAL) ────────────────
-    - name: Notify Telegram Failure
-      if: failure()
-      uses: appleboy/telegram-action@master
-      with:
-        to: ${{ secrets.TELEGRAM_TO }}
-        token: ${{ secrets.TELEGRAM_TOKEN }}
-        format: markdown
-        message: |
-          ❌ *Deployment Crash - Emergency!*
+      - name: Notify Telegram Failure
+        if: failure()
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ secrets.TELEGRAM_TO }}
+          token: ${{ secrets.TELEGRAM_TOKEN }}
+          format: markdown
+          message: |
+            ❌ *Deployment Crash - Emergency!*
 
-          *Repository:* ${{ github.repository }}
-          *Branch:* `${{ github.ref_name }}`
-          *SHA:* `${{ steps.vars.outputs.sha_short }}`
-          *Status:* Smoke Test Gagal! ⚠️
+            *Repo:* ${{ github.repository }}
+            *Branch:* `${{ github.ref_name }}`
+            *SHA:* `${{ steps.vars.outputs.sha_short }}`
+            *Status:* Smoke Test Gagal! ⚠️
 
-          [Cek Log Kegagalan Sekarang](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            [Cek Log Error Sekarang](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
