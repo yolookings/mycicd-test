@@ -79,38 +79,87 @@ jobs:
           retention-days: 7
 
   # ── NEW: Stage CD (Hanya jalan setelah test sukses) ─────────────────────────
-  build-and-push:
-    name: Build & Push Image to GHCR
-    needs: test
-    runs-on: ubuntu-latest
-    # CD hanya dipicu oleh push ke branch utama (bukan Pull Request)
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/staging')
-    permissions:
-      contents: read
-      packages: write
+build-and-push:
+  name: Build, Push, and Smoke Test
+  needs: test
+  runs-on: ubuntu-latest
+  if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/staging')
+  permissions:
+    contents: read
+    packages: write
 
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+  steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
 
-      - name: Login to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+    - name: Login to GHCR
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Mengambil 7 karakter SHA untuk tagging sesuai Skenario 3
-      - name: Get Short SHA
-        id: vars
-        run: echo "sha_short=$(git rev-parse --short=7 HEAD)" >> $GITHUB_OUTPUT
+    - name: Get Short SHA
+      id: vars
+      run: echo "sha_short=$(git rev-parse --short=7 HEAD)" >> $GITHUB_OUTPUT
 
-      - name: Build and Push Docker Image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: true
-          # Format Tag: ghcr.io/username/repo:sha-abcdefg
-          tags: |
-            ghcr.io/${{ github.repository }}:sha-${{ steps.vars.outputs.sha_short }}
-            ghcr.io/${{ github.repository }}:latest
+    - name: Build and Push Docker Image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        push: true
+        tags: |
+          ghcr.io/${{ github.repository }}:sha-${{ steps.vars.outputs.sha_short }}
+          ghcr.io/${{ github.repository }}:latest
+
+    # ── KRITERIA SKENARIO 4: SMOKE TEST ──────────────────────────────────
+    - name: Run Smoke Test
+      run: |
+        docker run -d --name smoke-test -p 8080:8080 ghcr.io/${{ github.repository }}:sha-${{ steps.vars.outputs.sha_short }}
+        echo "Waiting for server to be ready..."
+        sleep 5
+
+        echo "Running Health Check..."
+        curl -f http://localhost:8080/health || (docker logs smoke-test && exit 1)
+
+        echo "Running API Stats Check..."
+        curl -f http://localhost:8080/api/v1/stats || (docker logs smoke-test && exit 1)
+
+        echo "✅ Smoke test berhasil"
+        docker rm -f smoke-test
+
+    # ── KRITERIA SKENARIO 4: NOTIFIKASI TELEGRAM (SUKSES) ───────────────
+    - name: Notify Telegram Success
+      if: success()
+      uses: appleboy/telegram-action@master
+      with:
+        to: ${{ secrets.TELEGRAM_TO }}
+        token: ${{ secrets.TELEGRAM_TOKEN }}
+        format: markdown
+        message: |
+          ✅ *Deployment Stable - Siap Demo!*
+
+          *Repository:* ${{ github.repository }}
+          *Branch:* `${{ github.ref_name }}`
+          *SHA:* `${{ steps.vars.outputs.sha_short }}`
+          *Status:* Smoke Test Lulus 🚀
+
+          [Lihat Pipeline Run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+
+    # ── KRITERIA SKENARIO 4: NOTIFIKASI TELEGRAM (GAGAL) ────────────────
+    - name: Notify Telegram Failure
+      if: failure()
+      uses: appleboy/telegram-action@master
+      with:
+        to: ${{ secrets.TELEGRAM_TO }}
+        token: ${{ secrets.TELEGRAM_TOKEN }}
+        format: markdown
+        message: |
+          ❌ *Deployment Crash - Emergency!*
+
+          *Repository:* ${{ github.repository }}
+          *Branch:* `${{ github.ref_name }}`
+          *SHA:* `${{ steps.vars.outputs.sha_short }}`
+          *Status:* Smoke Test Gagal! ⚠️
+
+          [Cek Log Kegagalan Sekarang](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
