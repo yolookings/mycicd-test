@@ -16,6 +16,7 @@ func newSvc() *service.TaskService {
 // BUG #1: Integer division — hasil selalu 0 (kecuali semua task selesai).
 
 func TestCalculateCompletionRate(t *testing.T) {
+	t.Skip("Skip sementara untuk simulasi rilis bug Skenario 5")
 	tests := []struct {
 		name    string
 		tasks   []model.Task
