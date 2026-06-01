@@ -1,7 +1,7 @@
 # Makefile — TaskFlow API
 BINARY   = bin/taskflow-api
-IMAGE    = taskflow-api
-REGISTRY ?= ghcr.io/yolookings/mycicd-test
+REGISTRY ?= ghcr.io
+IMAGE    ?= yolookings/mycicd-test/taskflow-api
 VERSION  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "dev")
 DB_URL   ?= postgres://taskflow:taskflow_secret@localhost:5432/taskflow?sslmode=disable
 
