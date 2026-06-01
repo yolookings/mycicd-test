@@ -1,6 +1,8 @@
 name: TaskFlow API CI/CD Pipeline
+
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  REGISTRY: ghcr.io
 
 on:
   push:
@@ -16,6 +18,7 @@ on:
       - dev
 
 jobs:
+  # ── CI STAGE: Validasi & Testing ────────────────────────────────────────────
   test:
     name: Test with Go v${{ matrix.go-version }}
     runs-on: ubuntu-latest
@@ -47,7 +50,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: ${{ matrix.go-version }}
-          cache: true
+          cache: ${{ matrix.go-version != '1.21' }} # Hindari error tar di Go 1.21
 
       - name: Install Dependencies
         run: go mod download
@@ -80,6 +83,7 @@ jobs:
           path: cov.out
           retention-days: 7
 
+  # ── CD STAGE: Build, Tagging SHA & Stable, Smoke Test ───────────────────────
   build-and-push:
     name: Build, Push, and Smoke Test
     needs: test
@@ -93,46 +97,46 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Set up Go v${{ matrix.go-version }}
-        uses: actions/setup-go@v5
-        with:
-          go-version: ${{ matrix.go-version }}
-          # Matikan cache jika versi 1.21 untuk menghindari error tar
-          cache: ${{ matrix.go-version != '1.21' }}
-
-      - name: Install Dependencies
-        # Tambahkan manual install untuk memastikan dependency bersih di 1.21
-        run: go mod download
-
       - name: Login to GHCR
         uses: docker/login-action@v3
         with:
-          registry: ghcr.io
+          registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Get Short SHA
         id: vars
-        run: echo "sha_short=$(git rev-parse --short=7 HEAD)" >> $GITHUB_OUTPUT
+        run: |
+          echo "sha_short=$(git rev-parse --short=7 HEAD)" >> $GITHUB_OUTPUT
+          echo "image_name=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
 
-      - name: Build and Push Docker Image
+      - name: Build and Push Docker Image (Initial Tags)
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
+          # S5: Push menggunakan tag SHA unik tiap commit
           tags: |
-            ghcr.io/${{ github.repository }}:sha-${{ steps.vars.outputs.sha_short }}
-            ghcr.io/${{ github.repository }}:latest
+            ${{ env.REGISTRY }}/${{ steps.vars.outputs.image_name }}:sha-${{ steps.vars.outputs.sha_short }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Run Smoke Test
         run: |
-          docker run -d --name smoke-test -p 8080:8080 ghcr.io/${{ github.repository }}:sha-${{ steps.vars.outputs.sha_short }}
+          docker run -d --name smoke-test -p 8080:8080 ${{ env.REGISTRY }}/${{ steps.vars.outputs.image_name }}:sha-${{ steps.vars.outputs.sha_short }}
           echo "Waiting for server to be ready..."
           sleep 5
           curl -f http://localhost:8080/health || (docker logs smoke-test && exit 1)
           curl -f http://localhost:8080/api/v1/stats || (docker logs smoke-test && exit 1)
           echo "✅ Smoke test berhasil"
           docker rm -f smoke-test
+
+      # S5: Dorong tag :stable HANYA saat Smoke Test dinyatakan PASS penuh
+      - name: Tag and Push Image as Stable
+        run: |
+          docker pull ${{ env.REGISTRY }}/${{ steps.vars.outputs.image_name }}:sha-${{ steps.vars.outputs.sha_short }}
+          docker tag ${{ env.REGISTRY }}/${{ steps.vars.outputs.image_name }}:sha-${{ steps.vars.outputs.sha_short }} ${{ env.REGISTRY }}/${{ steps.vars.outputs.image_name }}:stable
+          docker push ${{ env.REGISTRY }}/${{ steps.vars.outputs.image_name }}:stable
 
       - name: Notify Telegram Success
         if: success()
@@ -147,7 +151,7 @@ jobs:
             *Repo:* ${{ github.repository }}
             *Branch:* `${{ github.ref_name }}`
             *SHA:* `${{ steps.vars.outputs.sha_short }}`
-            *Status:* Smoke Test Lulus 🚀
+            *Status:* Smoke Test Lulus & Tag :stable Diperbarui! 🚀
 
             [Lihat Detail Pipeline](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
 
@@ -164,6 +168,6 @@ jobs:
             *Repo:* ${{ github.repository }}
             *Branch:* `${{ github.ref_name }}`
             *SHA:* `${{ steps.vars.outputs.sha_short }}`
-            *Status:* Smoke Test Gagal! ⚠️
+            *Status:* Smoke Test Gagal (Tag :stable Ditahan) ⚠️
 
             [Cek Log Error Sekarang](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
