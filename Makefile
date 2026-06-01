@@ -1,7 +1,7 @@
 # Makefile — TaskFlow API
 BINARY   = bin/taskflow-api
 REGISTRY ?= ghcr.io
-IMAGE    ?= yolookings/mycicd-test/taskflow-api
+IMAGE    ?= yolookings/mycicd-test
 VERSION  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "dev")
 DB_URL   ?= postgres://taskflow:taskflow_secret@localhost:5432/taskflow?sslmode=disable
 
@@ -68,13 +68,22 @@ docker-stable:
 rollback:
 	@test -n "$(ROLLBACK_TAG)" || (echo "❌ Set ROLLBACK_TAG=sha-xxxxx"; exit 1)
 	@echo "→ Rolling back ke $(REGISTRY)/$(IMAGE):$(ROLLBACK_TAG)"
-	docker pull $(REGISTRY)/$(IMAGE):$(ROLLBACK_TAG)
+	
+	# 1. PAKSA PULL MENGGUNAKAN PLATFORM AMD64 (Solusi Error Anda):
+	docker pull --platform linux/amd64 $(REGISTRY)/$(IMAGE):$(ROLLBACK_TAG)
+	
+	# 2. Hapus container lama yang membawa bug jika masih menggantung
 	docker stop taskflow-api 2>/dev/null || true
-	docker run -d --rm \
+	docker rm taskflow-api 2>/dev/null || true
+	
+	# 3. JALANKAN KEMBALI MENGGUNAKAN PLATFORM AMD64 DAN DNS MAC HOST:
+	docker run -d \
 	  --name taskflow-api \
+	  --platform linux/amd64 \
 	  -p 8080:8080 \
-	  -e DATABASE_URL=$(DB_URL) \
+	  -e DATABASE_URL="postgres://taskflow:taskflow_secret@host.docker.internal:5432/taskflow?sslmode=disable" \
 	  $(REGISTRY)/$(IMAGE):$(ROLLBACK_TAG)
+	
 	@echo "⏳ Menunggu server siap..."
 	@sleep 5
 	curl -sf http://localhost:8080/health || (echo "❌ Health check gagal!"; exit 1)
