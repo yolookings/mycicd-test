@@ -3,6 +3,7 @@ name: TaskFlow API CI/CD Pipeline
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   REGISTRY: ghcr.io
+  DB_URL: postgres://taskflow:taskflow_secret@localhost:5432/taskflow?sslmode=disable
 
 on:
   push:
@@ -50,23 +51,21 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: ${{ matrix.go-version }}
-          cache: ${{ matrix.go-version != '1.21' }} # Hindari error tar di Go 1.21
+          cache: ${{ matrix.go-version != '1.21' }}
 
       - name: Install Dependencies
         run: go mod download
 
       - name: Run Go Vet
-        run: go vet ./...
+        run: make vet
 
       - name: Run Integration & Unit Tests
-        env:
-          DATABASE_URL: postgres://taskflow:taskflow_secret@localhost:5432/taskflow?sslmode=disable
-        run: |
-          go test -tags=integration -race -coverprofile=cov.out ./...
+        run: make test-integration
 
       - name: Check Code Coverage Threshold
         run: |
-          TOTAL_COVERAGE=$(go tool cover -func=cov.out | grep total | awk '{print $3}' | sed 's/%//')
+          make test-cover
+          TOTAL_COVERAGE=$(grep total coverage.out | awk '{print $3}' | sed 's/%//')
           echo "Total Project Coverage: $TOTAL_COVERAGE%"
           if (( $(echo "$TOTAL_COVERAGE < 75.0" | bc -l) )); then
             echo "❌ ERROR: Coverage ($TOTAL_COVERAGE%) di bawah 75%!"
@@ -74,13 +73,13 @@ jobs:
           fi
 
       - name: Compile Binary
-        run: go build -o taskflow-api ./cmd/server/main.go
+        run: make build
 
       - name: Upload Coverage Artifact
         uses: actions/upload-artifact@v4
         with:
           name: code-coverage-report-go-${{ matrix.go-version }}
-          path: cov.out
+          path: coverage.out
           retention-days: 7
 
   # ── CD STAGE: Build, Tagging SHA & Stable, Smoke Test ───────────────────────
@@ -97,6 +96,12 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      # SOLUSI ERROR CACHE: Membuat builder instance terisolasi yang mendukung ekspor cache gha
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver: docker-container
+
       - name: Login to GHCR
         uses: docker/login-action@v3
         with:
@@ -110,17 +115,18 @@ jobs:
           echo "sha_short=$(git rev-parse --short=7 HEAD)" >> $GITHUB_OUTPUT
           echo "image_name=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
 
-      - name: Build and Push Docker Image (Initial Tags)
+      # Melakukan build & push menggunakan action resmi agar integrasi cache gha optimal
+      - name: Build and Push Docker Image
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
-          # S5: Push menggunakan tag SHA unik tiap commit
           tags: |
             ${{ env.REGISTRY }}/${{ steps.vars.outputs.image_name }}:sha-${{ steps.vars.outputs.sha_short }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # Jalankan Uji Smoke Test Lokal di dalam Runner
       - name: Run Smoke Test
         run: |
           docker run -d --name smoke-test -p 8080:8080 ${{ env.REGISTRY }}/${{ steps.vars.outputs.image_name }}:sha-${{ steps.vars.outputs.sha_short }}
@@ -131,13 +137,12 @@ jobs:
           echo "✅ Smoke test berhasil"
           docker rm -f smoke-test
 
-      # S5: Dorong tag :stable HANYA saat Smoke Test dinyatakan PASS penuh
+      # S5: Tempel dan push tag :stable menggunakan Makefile Anda HANYA setelah Smoke Test lulus murni
       - name: Tag and Push Image as Stable
         run: |
-          docker pull ${{ env.REGISTRY }}/${{ steps.vars.outputs.image_name }}:sha-${{ steps.vars.outputs.sha_short }}
-          docker tag ${{ env.REGISTRY }}/${{ steps.vars.outputs.image_name }}:sha-${{ steps.vars.outputs.sha_short }} ${{ env.REGISTRY }}/${{ steps.vars.outputs.image_name }}:stable
-          docker push ${{ env.REGISTRY }}/${{ steps.vars.outputs.image_name }}:stable
+          make docker-stable VERSION=${{ steps.vars.outputs.sha_short }} REGISTRY=${{ env.REGISTRY }}/${{ steps.vars.outputs.image_name }}
 
+      # Notifikasi Telegram jika alur sukses sepenuhnya
       - name: Notify Telegram Success
         if: success()
         uses: appleboy/telegram-action@master
@@ -155,6 +160,7 @@ jobs:
 
             [Lihat Detail Pipeline](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
 
+      # Notifikasi Telegram jika salah satu proses di atas gagal
       - name: Notify Telegram Failure
         if: failure()
         uses: appleboy/telegram-action@master
