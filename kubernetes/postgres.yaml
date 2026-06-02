@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: taskflow-db
+  namespace: taskflow-prod
+spec:
+  serviceName: "taskflow-db-svc"
+  replicas: 1
+  selector:
+    matchLabels:
+      app: taskflow-db
+  template:
+    metadata:
+      labels:
+        app: taskflow-db
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:15-alpine
+          env:
+            - name: POSTGRES_USER
+              value: taskflow
+            - name: POSTGRES_PASSWORD
+              value: taskflow_secret
+            - name: POSTGRES_DB
+              value: taskflow
+          ports:
+            - containerPort: 5432
+              name: postgres
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: taskflow-db-svc
+  namespace: taskflow-prod
+spec:
+  selector:
+    app: taskflow-db
+  ports:
+    - protocol: TCP
+      port: 5432
+      targetPort: 5432

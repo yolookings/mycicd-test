@@ -1,7 +1,7 @@
 name: TaskFlow API CI/CD Pipeline
 
 env:
-  FORCE_ACTIONS_TO_NODE24: true
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   REGISTRY: ghcr.io
   DB_URL: postgres://taskflow:taskflow_secret@localhost:5432/taskflow?sslmode=disable
 
