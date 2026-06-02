@@ -126,12 +126,17 @@ jobs:
   # ── CD STAGE: Build, Tagging SHA & Stable, Smoke Test ───────────────────────
   build-and-push:
     name: Build, Push, and Smoke Test
-    needs: [test, security-audit] # <-- DIUBAH DI SINI: Wajib lulus tes keamanan sebelum deploy
+    needs: [test, security-audit]
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/staging')
     permissions:
       contents: read
       packages: write
+
+    # Menghubungkan output variabel ke job deploy di bawahnya
+    outputs:
+      image_name: ${{ steps.vars.outputs.image_name }}
+      sha_short: ${{ steps.vars.outputs.sha_short }}
 
     steps:
       - name: Checkout Code
@@ -160,6 +165,10 @@ jobs:
         with:
           context: .
           push: true
+          # ── TAMBAHKAN BARIS INI ──────────────────────────────────────────
+          # Ini akan menyuruh GitHub membuat dua biner sekaligus di dalam satu image tag!
+          platforms: linux/amd64, linux/arm64
+          # ─────────────────────────────────────────────────────────────────
           tags: |
             ${{ env.REGISTRY }}/${{ steps.vars.outputs.image_name }}:sha-${{ steps.vars.outputs.sha_short }}
           cache-from: type=gha
@@ -215,3 +224,50 @@ jobs:
             *Status:* Smoke Test / Security Audit Gagal (Tag :stable Ditahan) ⚠️
 
             [Cek Log Error Sekarang](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+
+  # ── K8S STAGE: Otomatis CD ke Cluster Kubernetes ────────────────────────────
+  deploy:
+    name: Deploy ke Kubernetes
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.ref == 'refs/heads/main' # Hanya auto-deploy jika push dilakukan ke branch main
+
+    steps:
+      - name: Checkout kode
+        uses: actions/checkout@v4
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: "latest"
+
+      - name: Konfigurasi kubeconfig
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBECONFIG_BASE64 }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      - name: Update image di Deployment
+        run: |
+          IMAGE="ghcr.io/${{ needs.build-and-push.outputs.image_name }}:sha-${{ needs.build-and-push.outputs.sha_short }}"
+          echo "→ Deploy image: $IMAGE"
+
+          kubectl set image deployment/taskflow-api \
+            taskflow-api=$IMAGE \
+            -n taskflow-prod
+
+      - name: Tunggu rollout selesai
+        run: |
+          kubectl rollout status deployment/taskflow-api \
+            -n taskflow-prod \
+            --timeout=120s
+
+      - name: Verifikasi deployment
+        run: |
+          echo "→ Status Pod setelah deploy:"
+          kubectl get pods -n taskflow-prod
+          echo "→ Image yang berjalan:"
+          kubectl get deployment taskflow-api -n taskflow-prod \
+            -o jsonpath='{.spec.template.spec.containers[0].image}'
+          echo ""
+          echo "✅ Deploy berhasil!"
